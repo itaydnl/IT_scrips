@@ -1,0 +1,1 @@
+runas /user:posprod\itayda /savecred C:\SnifTools\RemoteVer2.bat
