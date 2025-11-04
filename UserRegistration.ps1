@@ -19,7 +19,8 @@ Write-Host ""
 # Function to validate email format
 function Test-EmailFormat {
     param([string]$email)
-    return $email -match "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    # Improved regex that prevents consecutive dots and ensures proper email structure
+    return $email -match "^[a-zA-Z0-9][a-zA-Z0-9._%+-]*[a-zA-Z0-9]@[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]\.[a-zA-Z]{2,}$" -and $email -notmatch '\.\.'
 }
 
 # Function to validate username format (no special characters except underscore)
@@ -86,15 +87,28 @@ do {
         $newUserPassword = Read-Host -Prompt "Initial Password" -AsSecureString
         $confirmPassword = Read-Host -Prompt "Confirm Password" -AsSecureString
         
-        $pwd1_text = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($newUserPassword))
-        $pwd2_text = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirmPassword))
+        # Secure password comparison using NetworkCredential
+        $pwd1_text = (New-Object System.Net.NetworkCredential("", $newUserPassword)).Password
+        $pwd2_text = (New-Object System.Net.NetworkCredential("", $confirmPassword)).Password
         
-        if ($pwd1_text -ne $pwd2_text) {
+        $passwordsMatch = $pwd1_text -ceq $pwd2_text
+        $passwordLengthOk = $pwd1_text.Length -ge 8
+        
+        # Clear password variables immediately after use
+        if (-not $passwordsMatch) {
             Write-Host -ForegroundColor Red "✗ Passwords do not match. Please try again."
-        } elseif ($pwd1_text.Length -lt 8) {
+            $pwd1_text = $null
+            $pwd2_text = $null
+        } elseif (-not $passwordLengthOk) {
             Write-Host -ForegroundColor Red "✗ Password must be at least 8 characters long."
+            $pwd1_text = $null
+            $pwd2_text = $null
         }
-    } while ($pwd1_text -ne $pwd2_text -or $pwd1_text.Length -lt 8)
+    } while (-not $passwordsMatch -or -not $passwordLengthOk)
+    
+    # Clear sensitive data from memory
+    $pwd1_text = $null
+    $pwd2_text = $null
     
     $changePasswordAtLogon = Read-Host -Prompt "Require password change at first logon? (Y/N)"
     $mustChangePassword = $changePasswordAtLogon -eq "Y" -or $changePasswordAtLogon -eq "y"
@@ -156,9 +170,28 @@ do {
             Write-Host -ForegroundColor Yellow "      PowerShell module is installed and you have proper permissions."
             Write-Host ""
             
-            # Log the registration
-            $logEntry = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - User created: $newUsername ($displayName) - Email: $email - Department: $department"
-            Add-Content -Path "$PSScriptRoot\UserRegistration.log" -Value $logEntry
+            # Log the registration (sanitized data only)
+            $logPath = "$PSScriptRoot\UserRegistration.log"
+            $logEntry = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - User created: $newUsername - Department: $department"
+            
+            # Create log file with restricted permissions if it doesn't exist
+            if (-not (Test-Path $logPath)) {
+                New-Item -Path $logPath -ItemType File -Force | Out-Null
+                # Set restrictive permissions (owner only) on Windows
+                if ($IsWindows -or $null -eq $IsWindows) {
+                    $acl = Get-Acl $logPath
+                    $acl.SetAccessRuleProtection($true, $false)
+                    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                        [System.Security.Principal.WindowsIdentity]::GetCurrent().Name,
+                        "FullControl",
+                        "Allow"
+                    )
+                    $acl.SetAccessRule($rule)
+                    Set-Acl -Path $logPath -AclObject $acl
+                }
+            }
+            
+            Add-Content -Path $logPath -Value $logEntry
             Write-Host -ForegroundColor Cyan "✓ Registration logged to UserRegistration.log"
             
         } catch {
